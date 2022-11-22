@@ -1,8 +1,10 @@
 import 'dart:convert';
 
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'MapData.dart';
 import 'main.dart';
 
 class HomePage extends StatefulWidget {
@@ -13,31 +15,114 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  static const platform = MethodChannel('com.app.mapbox_demo_flutter');
+  //static const platform = MethodChannel('com.app.mapbox_demo_flutter');
+
   LocationList locationList = LocationList();
 
   bool isResponseForDestination = true;
   bool isLoading = false;
+/*
+  Future<void> responseFromNativeCode() async {
+    String response = "";
+    try {
+      final String result = await platform.invokeMethod('helloFromNativeCode');
+      response = result;
+    } on PlatformException catch (e) {
+      response = "Failed to Invoke: '${e.message}'.";
+    }
+    setState(() {
+      _responseFromNativeCode = response;
+    });
+  }
+*/
+
+  Future<void> askPermission() async {
+    LocationPermission permission;
+
+    // Test if location services are enabled.
+    var serviceEnabled = await Geolocator.isLocationServiceEnabled();
+
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        // Get.snackbar('', 'Location Permission Denied');
+        // Permissions are denied, next time you could try
+        // requesting permissions again (this is also where
+        // Android's shouldShowRequestPermissionRationale
+        // returned true. According to Android guidelines
+        // your App should show an explanatory UI now.
+        return Future.error('Location permissions are denied');
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      // Permissions are denied forever, handle appropriately.
+      return Future.error(
+          'Location permissions are permanently denied, we cannot request permissions.');
+    }
+    return;
+  }
 
   @override
   void initState() {
     super.initState();
-  }
 
-  Future<void> postDataToNative(Map data) async {
-    platform.invokeMethod('LatLong', Map.from(data)).then((value) {
-      debugPrint(value.toString());
-    });
+    askPermission();
   }
 
   TextEditingController? startcontroller;
+  TextEditingController? changeDestinationLngController =
+      TextEditingController();
+  TextEditingController? changeDestinationLatController =
+      TextEditingController();
   TextEditingController? endcontroller;
   final _formKey = GlobalKey<FormState>();
 
+  var changePointLat;
+  var changePointLng;
   var startPointLat;
   var startPointLon;
   var endPointLat;
   var endPointLong;
+
+  static const MethodChannel methodChannel =
+      MethodChannel('samples.flutter.io/game');
+  static const EventChannel eventChannel =
+      EventChannel('samples.flutter.io/report');
+
+  String _reportStatus = 'ETA: unknown.';
+  String _initialRoute = 'Initial Route Data: unknown.';
+
+  Future<void> postDataToNative(Map data) async {
+    try {
+      eventChannel.receiveBroadcastStream().listen(_onEvent, onError: _onError);
+      await methodChannel.invokeMethod('startNewActivity', data);
+    } on PlatformException catch (e) {
+      debugPrint("Failed to Invoke: '${e.message}'.");
+    }
+  }
+
+  void _onEvent(Object? event) {
+    var str = event.toString();
+    MapData user = MapData.fromJson(jsonDecode(str));
+    var time = user.eta;
+    setState(() {
+      if (user.type == "initial_route") {
+        _initialRoute = user.latLngJSON!;
+      }
+      if (user.type == "eta") {
+        _reportStatus = "ETA: $time Min";
+      }
+    });
+    debugPrint(_reportStatus);
+  }
+
+  void _onError(Object error) {
+    setState(() {
+      _reportStatus = 'ETA: unknown.';
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -51,6 +136,7 @@ class _HomePageState extends State<HomePage> {
               children: [
                 TextFormField(
                   controller: startcontroller,
+                  // initialValue: 'Avenida T-9',
                   decoration: const InputDecoration(
                       hintText: 'start point', labelText: "Start point"),
                   onChanged: (value) {
@@ -86,6 +172,46 @@ class _HomePageState extends State<HomePage> {
                     return null;
                   },
                 ),
+                const SizedBox(height: 19),
+                TextFormField(
+                  controller: changeDestinationLatController,
+                  // initialValue: 'Avenida T-63',
+                  keyboardType: const TextInputType.numberWithOptions(
+                      signed: false, decimal: true),
+                  decoration: const InputDecoration(
+                    hintText: 'Change Destination Latitude',
+                    labelText: "Destination Latitude",
+                  ),
+                  autovalidateMode: AutovalidateMode.onUserInteraction,
+                  onChanged: (value) {},
+                  /* validator: (value) {
+                    if (value?.isEmpty ?? false) {
+                      return "Field is required";
+                    }
+                    return null;
+                  },*/
+                ),
+                const SizedBox(height: 10),
+                TextFormField(
+                  controller: changeDestinationLngController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                      signed: false, decimal: true),
+                  decoration: const InputDecoration(
+                      hintText: 'Change Destination Longitude',
+                      labelText: "Destination Longitude"),
+                  autovalidateMode: AutovalidateMode.onUserInteraction,
+                  onChanged: (value) {},
+                  /* validator: (value) {
+                    if (value?.isEmpty ?? false) {
+                      return "Field is required";
+                    }
+                    return null;
+                  },*/
+                ),
+                const SizedBox(height: 19),
+                Text(_reportStatus),
+                const SizedBox(height: 15),
+                Text(_initialRoute),
                 const SizedBox(height: 15),
                 isLoading
                     ? const Center(child: CircularProgressIndicator())
@@ -144,7 +270,23 @@ class _HomePageState extends State<HomePage> {
             child: ElevatedButton(
               onPressed: () {
                 if (_formKey.currentState?.validate() ?? false) {
+                  if (changeDestinationLatController!.text.isEmpty) {
+                    changePointLat = 0.0;
+                  } else {
+                    changePointLat =
+                        changeDestinationLatController!.text.toString();
+                  }
+
+                  if (changeDestinationLngController!.text.isEmpty) {
+                    changePointLng = 0.0;
+                  } else {
+                    changePointLng =
+                        changeDestinationLngController!.text.toString();
+                  }
+
                   Map data = {
+                    "changePointLat": double.parse(changePointLat.toString()),
+                    "changePointLng": double.parse(changePointLng.toString()),
                     "startPointLat": double.parse(startPointLat.toString()),
                     "startPointLon": double.parse(startPointLon.toString()),
                     "endPointLat": double.parse(endPointLat.toString()),
